@@ -226,3 +226,19 @@
   66% { transform: translate(-30px, 20px) scale(0.96); }
 }
 .aurora { animation: aurora 14s ease-in-out infinite; filter: blur(60px); }
+
+/* Dark scope for editor / result pages — overrides light tokens locally */
+.dark-app {
+  --bg-base: #0a0a0d;
+  --bg-surface: #121218;
+  --bg-card: #1a1a22;
+  --bg-hover: #22222c;
+  --border: #2a2a36;
+  --border-active: #3a3a48;
+  --text-primary: #ffffff;
+  --text-secondary: #aaaab8;
+  --text-muted: #6b6b7a;
+  --accent-soft: rgba(108,71,255,0.18);
+  background-color: var(--bg-base);
+  color: var(--text-primary);
+}

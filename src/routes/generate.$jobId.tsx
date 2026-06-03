@@ -43,7 +43,7 @@ function GeneratePage() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col bg-[var(--bg-base)]">
+    <div className="dark-app min-h-screen flex flex-col">
       <header className="h-14 border-b border-[var(--border)] flex items-center px-5 justify-between shrink-0">
         <div className="flex items-center gap-5">
           <Logo />

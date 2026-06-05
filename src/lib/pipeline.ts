@@ -1,8 +1,9 @@
 // VidRush Pipeline — client-side state machine + real FFmpeg rendering
-// When user uploads files → produces a real .mp4 via FFmpeg.wasm
+// When user uploads files → produces a real .mp4 via backend server
 // When no files → uses free sample clips (demo mode)
 
 import { processVideo } from "./ffmpeg-processor";
+import { processVideoFiles } from "./video-processor";
 
 export type Stage =
   | "researching"
@@ -251,37 +252,58 @@ async function runPipeline(id: string) {
   const curJob = jobs.get(id)!;
   const videoFiles = curJob._videoFiles ?? [];
   const audioFile = curJob._audioFile ?? null;
-  const isRealMode = videoFiles.length > 0 || audioFile !== null;
+  const hasVideoFiles = videoFiles.length > 0;
 
-  if (isRealMode) {
-    // ── REAL MODE: FFmpeg.wasm ───────────────────────────
+  if (hasVideoFiles || audioFile !== null) {
+    // ── REAL MODE: video uploads use server-side render, audio-only falls back to browser demo engine
     let lastStepIdx = -1;
 
-    const blobUrl = await processVideo({
-      videoFiles,
-      audioFile,
-      onProgress: (pct, msg) => {
-        // Map pct (0–100) → step completions
-        const stepIdx = Math.min(
-          Math.floor((pct / 100) * renderSteps.length),
-          renderSteps.length - 1
-        );
-        const cur3 = jobs.get(id)!;
-        const nextSteps = cur3.renderSteps!.map((s, idx) => ({
-          ...s,
-          done: idx <= stepIdx,
-        }));
-        if (stepIdx !== lastStepIdx) lastStepIdx = stepIdx;
-        update(id, {
-          renderSteps: nextSteps,
-          renderProgress: pct,
-          progress: pct,
-          message: msg,
+    const outputUrl = hasVideoFiles
+      ? await processVideoFiles({
+          clipFiles: videoFiles.map((file) => ({ file, duration: 0 })),
+          audioFile: audioFile ?? undefined,
+          onProgress: (pct) => {
+            const stepIdx = Math.min(
+              Math.floor((pct / 100) * renderSteps.length),
+              renderSteps.length - 1
+            );
+            const cur3 = jobs.get(id)!;
+            const nextSteps = cur3.renderSteps!.map((s, idx) => ({
+              ...s,
+              done: idx <= stepIdx,
+            }));
+            if (stepIdx !== lastStepIdx) lastStepIdx = stepIdx;
+            update(id, {
+              renderSteps: nextSteps,
+              renderProgress: pct,
+              progress: pct,
+              message: `Rendering on server: ${pct}%`,
+            });
+          },
+        })
+      : await processVideo({
+          videoFiles,
+          audioFile,
+          onProgress: (pct, msg) => {
+            const stepIdx = Math.min(
+              Math.floor((pct / 100) * renderSteps.length),
+              renderSteps.length - 1
+            );
+            const cur3 = jobs.get(id)!;
+            const nextSteps = cur3.renderSteps!.map((s, idx) => ({
+              ...s,
+              done: idx <= stepIdx,
+            }));
+            if (stepIdx !== lastStepIdx) lastStepIdx = stepIdx;
+            update(id, {
+              renderSteps: nextSteps,
+              renderProgress: pct,
+              progress: pct,
+              message: msg,
+            });
+          },
         });
-      },
-    });
 
-    // Mark all steps done
     const cur3 = jobs.get(id)!;
     update(id, {
       renderSteps: cur3.renderSteps!.map((s) => ({ ...s, done: true })),
@@ -294,7 +316,7 @@ async function runPipeline(id: string) {
       stage: "done",
       progress: 100,
       message: "Render complete",
-      videoUrl: blobUrl,
+      videoUrl: outputUrl,
       durationSec: 60,
     });
   } else {

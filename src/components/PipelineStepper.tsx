@@ -1,3 +1,4 @@
+import { motion } from "framer-motion";
 import { Check, FileSearch, PenLine, Mic2, Film, Sparkles, Wand2 } from "lucide-react";
 import type { Stage } from "@/lib/pipeline";
 
@@ -27,7 +28,13 @@ export function PipelineStepper({ stage, message }: { stage: Stage; message: str
             ? "done"
             : "pending";
         return (
-          <div key={s.key} className="relative flex gap-4 pb-8 last:pb-0">
+          <motion.div
+            key={s.key}
+            initial={{ opacity: 0, x: -12 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ delay: i * 0.08, duration: 0.4 }}
+            className="relative flex gap-4 pb-8 last:pb-0"
+          >
             {i < STAGES.length - 1 && (
               <div
                 className={`absolute left-[19px] top-10 bottom-0 w-px ${
@@ -67,7 +74,7 @@ export function PipelineStepper({ stage, message }: { stage: Stage; message: str
                 {status === "active" ? message : status === "done" ? "Complete" : "Waiting..."}
               </div>
             </div>
-          </div>
+          </motion.div>
         );
       })}
     </div>

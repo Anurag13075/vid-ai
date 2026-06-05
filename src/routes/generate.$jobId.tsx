@@ -1,5 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import { Logo } from "@/components/Logo";
 import { PipelineStepper } from "@/components/PipelineStepper";
 import { ScriptPreview } from "@/components/ScriptPreview";
@@ -9,12 +10,62 @@ import { RenderProgress } from "@/components/RenderProgress";
 import { Timeline } from "@/components/Timeline";
 import { useJob } from "@/lib/usePipeline";
 import { getJob } from "@/lib/pipeline";
+import { useAuth } from "@/lib/auth";
 import { Loader2 } from "lucide-react";
 
 export const Route = createFileRoute("/generate/$jobId")({
   head: () => ({ meta: [{ title: "Generating · VidRush" }] }),
   component: GeneratePage,
 });
+
+/* ── Mini auth avatar for generate header ── */
+function NavAvatar() {
+  const { user, signOut } = useAuth();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  if (!user) return null;
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-2 px-2.5 py-1.5 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 transition-all"
+      >
+        <img src={user.avatar} alt={user.name} className="h-6 w-6 rounded-full ring-1 ring-[#6c47ff]/50" />
+        <span className="hidden sm:block text-[12px] text-white/70 font-medium">{user.name.split(" ")[0]}</span>
+      </button>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, y: -6, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -6, scale: 0.96 }}
+            transition={{ duration: 0.15 }}
+            className="absolute right-0 top-full mt-2 w-44 rounded-xl border border-white/10 bg-[#0d0d16]/95 backdrop-blur-xl shadow-xl z-50 overflow-hidden p-1"
+          >
+            <div className="px-3 py-2 border-b border-white/8 mb-0.5">
+              <div className="text-[12px] font-semibold text-white truncate">{user.name}</div>
+            </div>
+            <button
+              onClick={() => { signOut(); setOpen(false); }}
+              className="w-full text-left px-3 py-2 rounded-lg text-[12px] text-white/50 hover:text-white hover:bg-white/8 transition-all"
+            >
+              Sign out
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
 
 function GeneratePage() {
   const { jobId } = Route.useParams();
@@ -46,16 +97,19 @@ function GeneratePage() {
     <div className="dark-app min-h-screen flex flex-col">
       <header className="h-14 border-b border-[var(--border)] flex items-center px-5 justify-between shrink-0">
         <div className="flex items-center gap-5">
-          <Logo />
+          <Logo variant="light" />
           <div className="h-5 w-px bg-[var(--border)]" />
           <div className="text-[13px] text-[var(--text-secondary)] truncate max-w-[420px]">
             <span className="text-[var(--text-muted)]">Topic:</span>{" "}
             <span className="text-white">{job.topic}</span>
           </div>
         </div>
-        <div className="flex items-center gap-2 text-[12px] text-[var(--text-secondary)]">
-          <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent)] animate-pulse" />
-          {job.stage === "done" ? "Complete" : "Live render"}
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 text-[12px] text-[var(--text-secondary)]">
+            <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent)] animate-pulse" />
+            {job.stage === "done" ? "Complete" : "Live render"}
+          </div>
+          <NavAvatar />
         </div>
       </header>
 

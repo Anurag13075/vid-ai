@@ -1,5 +1,8 @@
-// Simulated VidRush pipeline. Pure client-side, runs in memory.
-// Drives the UI exactly like a real backend would, with realistic timings.
+// VidRush Pipeline — client-side state machine + real FFmpeg rendering
+// When user uploads files → produces a real .mp4 via FFmpeg.wasm
+// When no files → uses free sample clips (demo mode)
+
+import { processVideo } from "./ffmpeg-processor";
 
 export type Stage =
   | "researching"
@@ -44,15 +47,19 @@ export interface Job {
   voice: "male" | "female";
   length: "short" | "medium" | "long";
   stage: Stage;
-  progress: number; // 0-100 within current stage
+  progress: number;
   message: string;
   script?: Script;
   clips?: Clip[];
   renderSteps?: RenderStep[];
   renderProgress?: number;
   videoUrl?: string;
+  userVideoUrl?: string;
   durationSec?: number;
   createdAt: number;
+  // File references (not serialisable — kept in memory only)
+  _videoFiles?: File[];
+  _audioFile?: File | null;
 }
 
 type Listener = (job: Job) => void;
@@ -77,6 +84,11 @@ export function getJob(id: string): Job | undefined {
   return jobs.get(id);
 }
 
+/** Attach a user-uploaded video (objectURL) to an existing job */
+export function setUserVideo(id: string, url: string) {
+  update(id, { userVideoUrl: url });
+}
+
 export function subscribe(id: string, listener: Listener): () => void {
   if (!listeners.has(id)) listeners.set(id, new Set());
   listeners.get(id)!.add(listener);
@@ -84,8 +96,6 @@ export function subscribe(id: string, listener: Listener): () => void {
   if (job) listener(job);
   return () => listeners.get(id)?.delete(listener);
 }
-
-const SAMPLE_TOPICS: Record<string, Partial<Script>> = {};
 
 function makeScript(topic: string): Script {
   const cleanTopic = topic.trim() || "the secrets of the universe";
@@ -132,7 +142,6 @@ function capitalize(s: string) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-// Stable color-gradient thumbnails so clip grid always has visuals
 function gradientThumb(seed: number): string {
   const hues = [262, 200, 14, 180, 320, 40, 280, 160, 220, 0, 100, 240, 60, 300, 190];
   const h1 = hues[seed % hues.length];
@@ -147,6 +156,8 @@ export function createJob(input: {
   topic: string;
   voice: "male" | "female";
   length: "short" | "medium" | "long";
+  videoFiles?: File[];
+  audioFile?: File | null;
 }): string {
   const id = Math.random().toString(36).slice(2, 10);
   const job: Job = {
@@ -158,9 +169,10 @@ export function createJob(input: {
     progress: 0,
     message: "Initializing pipeline...",
     createdAt: Date.now(),
+    _videoFiles: input.videoFiles ?? [],
+    _audioFile: input.audioFile ?? null,
   };
   jobs.set(id, job);
-  // Fire and forget
   runPipeline(id).catch((e) => {
     update(id, { stage: "error", message: String(e) });
   });
@@ -168,19 +180,18 @@ export function createJob(input: {
 }
 
 async function runPipeline(id: string) {
-  // 1. RESEARCH
+  // ── 1. RESEARCH ──────────────────────────────────────────
   update(id, { stage: "researching", progress: 10, message: "Researching topic angles..." });
-  await sleep(900);
+  await sleep(1400);
   update(id, { progress: 50, message: "Cross-referencing sources..." });
-  await sleep(900);
+  await sleep(1400);
   update(id, { progress: 90, message: "Outlining narrative arc..." });
-  await sleep(800);
+  await sleep(1200);
 
-  // 2. WRITE
+  // ── 2. WRITE ─────────────────────────────────────────────
   const job = jobs.get(id)!;
   const script = makeScript(job.topic);
   update(id, { stage: "writing", progress: 20, message: "Drafting script structure...", script: { ...script, sections: [] } });
-  // Stream sections in
   for (let i = 0; i < script.sections.length; i++) {
     await sleep(120);
     const cur = jobs.get(id)!;
@@ -192,14 +203,14 @@ async function runPipeline(id: string) {
     });
   }
 
-  // 3. VOICEOVER
+  // ── 3. VOICEOVER ─────────────────────────────────────────
   update(id, { stage: "voiceover", progress: 0, message: `Synthesizing ${job.voice} neural voice...` });
   for (let p = 0; p <= 100; p += 8) {
     await sleep(160);
     update(id, { progress: p, message: p < 100 ? `Generating audio... ${p}%` : "Voiceover ready" });
   }
 
-  // 4. FOOTAGE
+  // ── 4. FOOTAGE ───────────────────────────────────────────
   const clips: Clip[] = script.sections.map((s) => ({
     id: s.id,
     keyword: s.visual_keyword,
@@ -212,48 +223,104 @@ async function runPipeline(id: string) {
     const next = [...cur.clips!];
     next[i] = { ...next[i], status: "downloading" };
     update(id, { clips: next, message: `Downloading: ${next[i].keyword}...` });
-    await sleep(220);
+    await sleep(180);
     const cur2 = jobs.get(id)!;
     const next2 = [...cur2.clips!];
     next2[i] = { ...next2[i], status: "ready" };
-    update(id, {
-      clips: next2,
-      progress: Math.round(((i + 1) / clips.length) * 100),
-    });
+    update(id, { clips: next2, progress: Math.round(((i + 1) / clips.length) * 100) });
   }
 
-  // 5. RENDER
-  const steps: RenderStep[] = [
-    { label: "Trimming clips to 4s @ 1080p", done: false },
-    { label: "Adding crossfade transitions", done: false },
-    { label: "Concatenating timeline", done: false },
-    { label: "Syncing voiceover track", done: false },
-    { label: "Mixing ambient music bed (-15dB)", done: false },
-    { label: "Burning in subtitles", done: false },
-    { label: "Rendering motion graphics", done: false },
+  // ── 5. RENDER (real FFmpeg or demo) ──────────────────────
+  const renderSteps: RenderStep[] = [
+    { label: "Loading FFmpeg engine", done: false },
+    { label: "Writing clips to memory", done: false },
+    { label: "Concatenating video timeline", done: false },
+    { label: "Mixing audio track", done: false },
     { label: "Encoding H.264 + AAC", done: false },
-    { label: "Exporting final.mp4", done: false },
+    { label: "Packaging final MP4", done: false },
   ];
-  update(id, { stage: "rendering", progress: 0, renderSteps: steps, renderProgress: 0, message: "Starting FFmpeg pipeline..." });
-  for (let i = 0; i < steps.length; i++) {
-    await sleep(700);
-    const cur = jobs.get(id)!;
-    const nextSteps = cur.renderSteps!.map((s, idx) => (idx === i ? { ...s, done: true } : s));
+
+  update(id, {
+    stage: "rendering",
+    progress: 0,
+    renderSteps,
+    renderProgress: 0,
+    message: "Starting render engine...",
+  });
+
+  const curJob = jobs.get(id)!;
+  const videoFiles = curJob._videoFiles ?? [];
+  const audioFile = curJob._audioFile ?? null;
+  const isRealMode = videoFiles.length > 0 || audioFile !== null;
+
+  if (isRealMode) {
+    // ── REAL MODE: FFmpeg.wasm ───────────────────────────
+    let lastStepIdx = -1;
+
+    const blobUrl = await processVideo({
+      videoFiles,
+      audioFile,
+      onProgress: (pct, msg) => {
+        // Map pct (0–100) → step completions
+        const stepIdx = Math.min(
+          Math.floor((pct / 100) * renderSteps.length),
+          renderSteps.length - 1
+        );
+        const cur3 = jobs.get(id)!;
+        const nextSteps = cur3.renderSteps!.map((s, idx) => ({
+          ...s,
+          done: idx <= stepIdx,
+        }));
+        if (stepIdx !== lastStepIdx) lastStepIdx = stepIdx;
+        update(id, {
+          renderSteps: nextSteps,
+          renderProgress: pct,
+          progress: pct,
+          message: msg,
+        });
+      },
+    });
+
+    // Mark all steps done
+    const cur3 = jobs.get(id)!;
     update(id, {
-      renderSteps: nextSteps,
-      renderProgress: Math.round(((i + 1) / steps.length) * 100),
-      progress: Math.round(((i + 1) / steps.length) * 100),
-      message: steps[i].label,
+      renderSteps: cur3.renderSteps!.map((s) => ({ ...s, done: true })),
+      renderProgress: 100,
+      progress: 100,
+    });
+
+    await sleep(400);
+    update(id, {
+      stage: "done",
+      progress: 100,
+      message: "Render complete",
+      videoUrl: blobUrl,
+      durationSec: 60,
+    });
+  } else {
+    // ── DEMO MODE: animated steps + sample video ─────────
+    for (let i = 0; i < renderSteps.length; i++) {
+      await sleep(700);
+      const cur3 = jobs.get(id)!;
+      const nextSteps = cur3.renderSteps!.map((s, idx) =>
+        idx === i ? { ...s, done: true } : s
+      );
+      update(id, {
+        renderSteps: nextSteps,
+        renderProgress: Math.round(((i + 1) / renderSteps.length) * 100),
+        progress: Math.round(((i + 1) / renderSteps.length) * 100),
+        message: renderSteps[i].label,
+      });
+    }
+
+    await sleep(600);
+    update(id, {
+      stage: "done",
+      progress: 100,
+      message: "Render complete",
+      videoUrl:
+        "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
+      durationSec: 60,
     });
   }
-
-  // 6. DONE — use a public sample video
-  await sleep(400);
-  update(id, {
-    stage: "done",
-    progress: 100,
-    message: "Render complete",
-    videoUrl: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
-    durationSec: 60,
-  });
 }

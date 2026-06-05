@@ -31,13 +31,7 @@ VidRush is an AI-powered faceless video production platform. You type a topic �
 
 > Built for faceless YouTube creators who want to scale content without a production team.
 
----
-
-## 🖥️ Preview
-
-> _Landing page screenshot — add `landing.png` to the root of the repo_
-
-![VidRush Landing](landing.png)
+--
 
 ---
 
